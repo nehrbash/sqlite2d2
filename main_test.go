@@ -13,6 +13,8 @@ CREATE TABLE users (
     id INTEGER PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     name TEXT,
+    icon TEXT,                       -- D2-reserved key; must be quoted
+    style TEXT,                      -- another D2-reserved key
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     status TEXT NOT NULL DEFAULT 'active'
 );
@@ -82,8 +84,8 @@ func TestLoadSchema(t *testing.T) {
 	}
 
 	users := got["users"]
-	if len(users.Columns) != 5 {
-		t.Errorf("users columns = %d, want 5", len(users.Columns))
+	if len(users.Columns) != 7 {
+		t.Errorf("users columns = %d, want 7", len(users.Columns))
 	}
 	if users.Columns[0].Name != "id" || users.Columns[0].PK != 1 {
 		t.Errorf("users.id should be PK, got %+v", users.Columns[0])
@@ -91,8 +93,9 @@ func TestLoadSchema(t *testing.T) {
 	if !users.Columns[1].NotNull || users.Columns[1].Name != "email" {
 		t.Errorf("users.email should be NOT NULL, got %+v", users.Columns[1])
 	}
-	if !users.Columns[3].Default.Valid || users.Columns[3].Default.String == "" {
-		t.Errorf("users.created_at should have default, got %+v", users.Columns[3])
+	// `created_at` shifted from index 3 to index 5 after adding icon/style.
+	if !users.Columns[5].Default.Valid || users.Columns[5].Default.String == "" {
+		t.Errorf("users.created_at should have default, got %+v", users.Columns[5])
 	}
 
 	posts := got["posts"]
@@ -141,7 +144,7 @@ func TestRenderD2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadSchema: %v", err)
 	}
-	out := renderD2(tables, "right")
+	out := renderD2(tables, "right", true)
 
 	mustContain := []string{
 		"direction: right",
@@ -152,6 +155,11 @@ func TestRenderD2(t *testing.T) {
 		"status: TEXT NOT NULL DEFAULT 'active'",
 		"user_id: INTEGER NOT NULL {constraint: foreign_key}",
 		"{constraint: [primary_key; foreign_key]}",
+		// D2-reserved column names must be quoted so D2 doesn't interpret
+		// them as shape properties (`icon:` would trigger an image bundle).
+		`"icon": TEXT`,
+		`"style": TEXT`,
+		// notes=true emits index markdown blocks.
 		"posts_indexes: |md",
 		"**Indexes on `posts`**",
 		"`idx_posts_published` *(partial)* on (published)",
@@ -167,6 +175,12 @@ func TestRenderD2(t *testing.T) {
 		}
 	}
 
+	// Bare `icon:` at column indent would break ELK/dagre (D2 treats it
+	// as a shape icon-image path). The reserved-name quoting must catch it.
+	if strings.Contains(out, "\n  icon: ") {
+		t.Errorf("unquoted reserved column `icon:` leaked into output:\n%s", out)
+	}
+
 	// PK index ("pk") and single-column unique-origin indexes must not appear
 	// in the markdown notes blocks.
 	if strings.Contains(out, "sqlite_autoindex") {
@@ -179,6 +193,28 @@ func TestRenderD2(t *testing.T) {
 	}
 }
 
+// notes=false (the default) must omit every `*_indexes: |md` block, since
+// they use `near: <table>` which ELK and dagre reject.
+func TestRenderD2_NotesDisabled(t *testing.T) {
+	db := openTestDB(t)
+	tables, err := loadSchema(db)
+	if err != nil {
+		t.Fatalf("loadSchema: %v", err)
+	}
+	out := renderD2(tables, "right", false)
+
+	if strings.Contains(out, "_indexes: |md") {
+		t.Errorf("notes=false should suppress _indexes blocks; got:\n%s", out)
+	}
+	if strings.Contains(out, "near:") {
+		t.Errorf("notes=false should not emit any `near:` directives; got:\n%s", out)
+	}
+	// Sanity: the rest of the schema still renders.
+	if !strings.Contains(out, "posts: {") {
+		t.Errorf("posts table missing from output:\n%s", out)
+	}
+}
+
 func TestD2Ident(t *testing.T) {
 	cases := map[string]string{
 		"simple":      "simple",
@@ -187,6 +223,14 @@ func TestD2Ident(t *testing.T) {
 		"dash-name":   `"dash-name"`,
 		`has"quote`:   `"has\"quote"`,
 		"snake_case2": "snake_case2",
+		// D2 reserved keys must be quoted even when otherwise-valid identifiers,
+		// so D2 reads them as child object names rather than shape properties.
+		"icon":      `"icon"`,
+		"shape":     `"shape"`,
+		"style":     `"style"`,
+		"label":     `"label"`,
+		"near":      `"near"`,
+		"direction": `"direction"`,
 	}
 	for in, want := range cases {
 		if got := d2Ident(in); got != want {

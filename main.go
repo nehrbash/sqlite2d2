@@ -58,8 +58,13 @@ type Table struct {
 func main() {
 	output := flag.String("o", "", "Output file (default: stdout)")
 	direction := flag.String("direction", "right", "D2 layout direction: up|down|left|right")
+	notes := flag.Bool("notes", false,
+		"Emit per-table markdown index notes pinned with `near:`. "+
+			"Only the TALA layout engine supports `near: <object>`; ELK and "+
+			"dagre will reject it, so this is off by default.")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: sqlite2d2 [-o out.d2] [-direction right] <database.sqlite>")
+		fmt.Fprintln(os.Stderr,
+			"usage: sqlite2d2 [-o out.d2] [-direction right] [-notes] <database.sqlite>")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -88,7 +93,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	out := renderD2(tables, *direction)
+	out := renderD2(tables, *direction, *notes)
 
 	if *output == "" {
 		fmt.Print(out)
@@ -212,7 +217,7 @@ func loadSchema(db *sql.DB) ([]Table, error) {
 	return tables, nil
 }
 
-func renderD2(tables []Table, direction string) string {
+func renderD2(tables []Table, direction string, notes bool) string {
 	var sb strings.Builder
 	sb.WriteString("# Auto-generated from SQLite schema by sqlite2d2\n")
 	sb.WriteString("# Render: d2 --layout=elk schema.d2 schema.svg\n\n")
@@ -273,6 +278,9 @@ func renderD2(tables []Table, direction string) string {
 		// Indexes as a markdown note pinned near the table.
 		// Skip the implicit PK index ("pk") since it duplicates the PK constraint.
 		// Also skip single-column unique-origin indexes already shown as {constraint: unique}.
+		if !notes {
+			continue
+		}
 		var notable []Index
 		for _, idx := range t.Indexes {
 			if idx.Origin == "pk" {
@@ -332,12 +340,39 @@ func renderD2(tables []Table, direction string) string {
 	return sb.String()
 }
 
-// d2Ident quotes an identifier if it contains characters D2 treats specially.
+// d2ReservedKeys are D2 keywords that, when used as a bare identifier in
+// a shape body, are interpreted as shape properties rather than as a
+// column/child name. The one that bites in practice is `icon` (D2 reads
+// the value as an image path and tries to bundle it). Quoting forces D2
+// to treat the name as a child object.
+var d2ReservedKeys = map[string]bool{
+	"icon":      true,
+	"shape":     true,
+	"style":     true,
+	"near":      true,
+	"label":     true,
+	"tooltip":   true,
+	"link":      true,
+	"classes":   true,
+	"direction": true,
+	"width":     true,
+	"height":    true,
+	"source":    true,
+	"target":    true,
+	"top":       true,
+	"left":      true,
+	"grid-rows": true,
+	"grid-cols": true,
+}
+
+// d2Ident quotes an identifier if it contains characters D2 treats
+// specially or collides with a D2 reserved key.
 func d2Ident(name string) string {
 	if name == "" {
 		return `""`
 	}
-	if strings.ContainsAny(name, " .-/\\\t\n\"'(){}[]:;,&|<>") {
+	if d2ReservedKeys[name] ||
+		strings.ContainsAny(name, " .-/\\\t\n\"'(){}[]:;,&|<>") {
 		return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
 	}
 	return name
