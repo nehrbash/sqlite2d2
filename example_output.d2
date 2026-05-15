@@ -1,0 +1,49 @@
+# Auto-generated from SQLite schema by sqlite2d2
+# Render: d2 --layout=elk schema.d2 schema.svg
+
+direction: right
+
+users: {
+  shape: sql_table
+  id: INTEGER {constraint: primary_key}
+  email: TEXT NOT NULL {constraint: unique}
+  name: TEXT
+  created_at: TEXT DEFAULT CURRENT_TIMESTAMP
+  status: TEXT NOT NULL DEFAULT 'active'
+}
+
+posts: {
+  shape: sql_table
+  id: INTEGER {constraint: primary_key}
+  user_id: INTEGER NOT NULL {constraint: foreign_key}
+  title: TEXT NOT NULL
+  body: TEXT
+  published: INTEGER NOT NULL DEFAULT 0
+}
+
+posts_indexes: |md
+  **Indexes on `posts`**
+
+  - `idx_posts_published` *(partial)* on (published)
+  - `idx_posts_user` on (user_id)
+| {
+  near: posts
+  style.fill: "#f7f7f5"
+}
+
+tags: {
+  shape: sql_table
+  id: INTEGER {constraint: primary_key}
+  name: TEXT NOT NULL {constraint: unique}
+}
+
+post_tags: {
+  shape: sql_table
+  post_id: INTEGER NOT NULL {constraint: [primary_key; foreign_key]}
+  tag_id: INTEGER NOT NULL {constraint: [primary_key; foreign_key]}
+}
+
+# Foreign-key relationships
+posts.user_id -> users.id : on delete cascade
+post_tags.tag_id -> tags.id : on delete cascade
+post_tags.post_id -> posts.id : on delete cascade

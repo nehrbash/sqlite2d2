@@ -1,0 +1,5 @@
+/sqlite2d2
+*.sqlite
+*.sqlite3
+*.db
+*.svg
